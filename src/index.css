@@ -30,3 +30,14 @@ body {
 input, select, textarea, button {
   font-family: inherit;
 }
+
+@media print {
+  body {
+    background: #fff !important;
+    color: #1a1a2e !important;
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+  .no-print { display: none !important; }
+  @page { size: A4; margin: 10mm; }
+}
