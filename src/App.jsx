@@ -71,7 +71,7 @@ const CAT_COLORS = {
   "EPI": "#22c55e", "Elétrica": "#a78bfa", "Discos": "#22d3ee", "Mat. Construção": "#3b82f6",
   "Alimentação": "#f97316", "Ferramentas": "#f59e0b", "Limpeza": "#ec4899", "Pintura": "#8b5cf6", "Outros": "#6b7280"
 };
-const STORAGE_KEY = "obra-compras-v3";
+const STORAGE_KEY = "obra-compras-v4";
 
 function getWeekLabel(dateStr) {
   const d = new Date(dateStr + "T12:00:00");
@@ -80,19 +80,136 @@ function getWeekLabel(dateStr) {
 function formatBRL(v) { return `R$ ${Number(v).toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`; }
 function sortWeeks(weeks) {
   const m = { Jan:1,Fev:2,Mar:3,Abr:4,Mai:5,Jun:6,Jul:7,Ago:8,Set:9,Out:10,Nov:11,Dez:12 };
-  return _.sortBy(weeks, w => { const p = w.match(/S(\d+)-(\w+)/); return p ? m[p[2]]*10+parseInt(p[1]) : 0; });
+  return _.sortBy(weeks, w => { const p = w.match(/S(\d+)-(\w+)/); return p ? (m[p[2]] || 0)*10+parseInt(p[1]) : 0; });
 }
 function autoCategory(prod) {
   const p = prod.toUpperCase();
-  if (/BOTA|LUVA|OCULOS|CAPACETE|PROTETOR AUR|RESPIRADOR|ABAFADOR|CARNEIRA|JUGULAR|CAPA CHUVA|TOUCA/.test(p)) return "EPI";
+  if (/BOTA|LUVA|OCULOS|CAPACETE|PROTETOR AUR|RESPIRADOR|ABAFADOR|CARNEIRA|JUGULAR|CAPA CHUVA|TOUCA|CINTO SEG|TALABARTE|COLETE REFLET/.test(p)) return "EPI";
   if (/DISCO/.test(p)) return "Discos";
-  if (/CABO|CONECTOR|FITA ISOLANTE|HASTE TERRA|CORDOALHA|GRAMPO TERRA|CAIXA ATERR|ESTABILIZADOR|REFLETOR/.test(p)) return "Elétrica";
-  if (/CAVADEIRA|ESQUADRO|PRUMO|PONTEIRO|TALHADEIRA|DESEMPENADEIRA|TRENA|LAPIS CARP/.test(p)) return "Ferramentas";
+  if (/CABO|CONECTOR|FITA ISOLANTE|HASTE TERRA|CORDOALHA|GRAMPO|CAIXA ATERR|ESTABILIZADOR|REFLETOR|ELETRODUTO|BARRAMENTO|CAIXA LUZ|PLUGUE|TOMADA|PLACA 4X2|ABRACADEIRA|DISJUNTOR|CHAVE|INTERRUPTOR|ARMACAO SEC/.test(p)) return "Elétrica";
+  if (/CAVADEIRA|ESQUADRO|PRUMO|PONTEIRO|TALHADEIRA|DESEMPENADEIRA|TRENA|LAPIS CARP|SERRA CIRC|PONTEIRA/.test(p)) return "Ferramentas";
   if (/REFEIC|GUARAVITA|MARMITA/.test(p)) return "Alimentação";
   if (/CLORO|DESINF|PAPEL HIG|ESPONJA|DETERGENTE|PANO|SABAO|SACO DE LIXO|SABONETE|DISPENSER|LIXEIRA/.test(p)) return "Limpeza";
   if (/ROLO PINTURA|THINNER|TRINCHA|TINTA/.test(p)) return "Pintura";
-  if (/MADEIRITE|FECHO|TUBO IND|MANGUEIRA|MASSA|TELA TAPUME|PROTETOR VERGALHAO|FITA ZEBRADA|ELETRODO|CADEADO/.test(p)) return "Mat. Construção";
+  if (/MADEIRITE|MADEIRA|FECHO|TUBO IND|MANGUEIRA|MASSA|TELA TAPUME|PROTETOR VERGALHAO|FITA ZEBRADA|ELETRODO|CADEADO|CIMENTO|AREIA|BRITA|COLUNA ACO|CHAPA|ESCORA|TABUA|PINUS|LONA|ESPADADOR|GUIA SUPORTE/.test(p)) return "Mat. Construção";
   return "Outros";
+}
+
+// ─── CSV Parsers ───
+function parseCSVLine(line) {
+  // Proper CSV parsing handling quoted fields with commas
+  const result = [];
+  let current = "";
+  let inQuotes = false;
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    if (ch === '"') { inQuotes = !inQuotes; }
+    else if (ch === ',' && !inQuotes) { result.push(current.trim()); current = ""; }
+    else if (ch === ';' && !inQuotes) { result.push(current.trim()); current = ""; }
+    else { current += ch; }
+  }
+  result.push(current.trim());
+  return result;
+}
+
+function parseBRNumber(str) {
+  if (!str) return NaN;
+  return parseFloat(str.replace(/\./g, "").replace(",", "."));
+}
+
+function parseOriginalCSV(text) {
+  const lines = text.replace(/\r\n/g, "\n").replace(/\r/g, "\n").trim().split("\n");
+  const entries = [];
+  let currentDate = null, currentForn = null;
+
+  // Detect separator: if first data line uses ; it's semicolon format
+  const isSemicolon = lines.some(l => /^\d{2}\/\d{2}\/\d{4};;;;?$/.test(l.trim()));
+  const isComma = lines.some(l => /^\d{2}\/\d{2}\/\d{4},,,\s*$/.test(l.trim()));
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i].trim();
+    if (!line || /^(Data da compra|C.digo|Fornecedor|Nome do produto|Total geral)/i.test(line)) continue;
+
+    // Date line
+    const dateMatch = line.match(/^(\d{2}\/\d{2}\/\d{4})\s*[;,]*\s*$/);
+    if (dateMatch) {
+      const p = dateMatch[1].split("/");
+      currentDate = `${p[2]}-${p[1]}-${p[0]}`;
+      continue;
+    }
+
+    // NFe line
+    const stripped = isComma ? line.replace(/,+$/, "").trim() : line.replace(/;+$/, "").trim();
+    if (/^NFe\s+/i.test(stripped)) continue;
+
+    // Fornecedor line
+    if ((isComma && line.endsWith(",,,")) || (isSemicolon && line.endsWith(";;;;"))) {
+      currentForn = stripped;
+      continue;
+    }
+    // Also catch fornecedor lines without trailing separators
+    if (stripped && !stripped.includes(",") && !stripped.includes(";") && !/^\d{2}\/\d{2}\/\d{4}$/.test(stripped) && !/^NFe/i.test(stripped)) {
+      const nextLine = i + 1 < lines.length ? lines[i + 1].trim() : "";
+      if (nextLine && /\d/.test(nextLine) && (nextLine.includes(",") || nextLine.includes(";"))) {
+        currentForn = stripped;
+        continue;
+      }
+    }
+
+    // Product line
+    const parts = parseCSVLine(line);
+    // We need at least 4 fields: name, val_unit, qty, val_bruto
+    if (parts.length >= 4) {
+      const vu = parseBRNumber(parts[parts.length - 3]);
+      const qt = parseBRNumber(parts[parts.length - 2]);
+      const vb = parseBRNumber(parts[parts.length - 1]);
+      if (!isNaN(vu) && !isNaN(qt) && !isNaN(vb) && vu > 0 && qt > 0) {
+        const prodName = parts.slice(0, parts.length - 3).join(" ").trim() || parts[0].trim();
+        if (prodName && currentDate) {
+          entries.push({
+            data: currentDate,
+            semana: getWeekLabel(currentDate),
+            fornecedor: currentForn || "Não identificado",
+            produto: prodName,
+            categoria: autoCategory(prodName),
+            valUnit: vu,
+            qtd: Math.round(qt),
+          });
+        }
+      }
+    }
+  }
+  return entries;
+}
+
+// ─── Price increase detector (>10% in <90 days) ───
+function detectPriceIncreases(data) {
+  const prodData = {};
+  data.forEach(d => {
+    if (!prodData[d.produto]) prodData[d.produto] = [];
+    prodData[d.produto].push({ data: d.data, preco: d.valUnit, fornecedor: d.fornecedor });
+  });
+
+  const alerts = [];
+  Object.entries(prodData).forEach(([prod, entries]) => {
+    const sorted = _.sortBy(entries, "data");
+    const uniquePrices = [];
+    sorted.forEach(e => {
+      if (!uniquePrices.length || uniquePrices[uniquePrices.length - 1].preco !== e.preco)
+        uniquePrices.push(e);
+    });
+    if (uniquePrices.length < 2) return;
+    for (let j = 0; j < uniquePrices.length - 1; j++) {
+      const a = uniquePrices[j], b = uniquePrices[j + 1];
+      if (a.preco === 0) continue;
+      const varPct = ((b.preco - a.preco) / a.preco) * 100;
+      const days = Math.round((new Date(b.data) - new Date(a.data)) / 86400000);
+      if (varPct > 10 && days < 90 && days > 0) {
+        alerts.push({ produto: prod, de: a.preco, para: b.preco, varPct: Math.round(varPct * 10) / 10, dias: days, dataInicio: a.data, dataFim: b.data, fornecedor: b.fornecedor });
+      }
+    }
+  });
+  return _.orderBy(alerts, "varPct", "desc");
 }
 
 // ─── Shared Components ───
@@ -297,6 +414,40 @@ function AnaliseCompras({ data }) {
         </div>
       </div>
 
+      {/* Aumentos >10% em <3 meses */}
+      {(() => {
+        const increases = detectPriceIncreases(data);
+        if (increases.length === 0) return null;
+        return (
+          <div style={{ ...card, marginBottom: 16 }}>
+            <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 4 }}>🔺 Produtos com Aumento &gt;10% em Menos de 3 Meses</div>
+            <div style={{ fontSize: 11, color: "#8c94a3", marginBottom: 14 }}>Monitoramento de reajustes acelerados — produtos cujo valor unitário subiu mais de 10% em menos de 90 dias</div>
+            <div style={{ overflowX: "auto" }}>
+              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+                <thead><tr style={{ borderBottom: "1px solid #252b35" }}>
+                  {["Produto", "Fornecedor", "Preço Inicial", "Preço Atual", "Variação", "Período", "Dias"].map(h => (
+                    <th key={h} style={{ textAlign: h === "Variação" || h === "Dias" ? "center" : h.includes("Preço") ? "right" : "left", padding: "8px 10px", fontSize: 10, color: "#8c94a3", fontWeight: 500, textTransform: "uppercase", letterSpacing: 0.3 }}>{h}</th>
+                  ))}
+                </tr></thead>
+                <tbody>{increases.map((a, i) => (
+                  <tr key={i} style={{ borderBottom: "1px solid #1c2129", background: i % 2 === 0 ? "transparent" : "#0e1117" }}>
+                    <td style={{ padding: "8px 10px", maxWidth: 220, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{a.produto}</td>
+                    <td style={{ padding: "8px 10px", fontSize: 11, color: "#8c94a3", maxWidth: 140, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{a.fornecedor}</td>
+                    <td style={{ padding: "8px 10px", textAlign: "right", fontFamily: "monospace" }}>{formatBRL(a.de)}</td>
+                    <td style={{ padding: "8px 10px", textAlign: "right", fontFamily: "monospace", fontWeight: 600 }}>{formatBRL(a.para)}</td>
+                    <td style={{ padding: "8px 10px", textAlign: "center" }}>
+                      <span style={{ padding: "2px 10px", borderRadius: 20, fontSize: 11, fontWeight: 700, fontFamily: "monospace", background: a.varPct > 30 ? "rgba(239,68,68,0.15)" : "rgba(245,158,11,0.15)", color: a.varPct > 30 ? "#ef4444" : "#f59e0b" }}>+{a.varPct}%</span>
+                    </td>
+                    <td style={{ padding: "8px 10px", fontSize: 11, color: "#8c94a3", whiteSpace: "nowrap" }}>{a.dataInicio.slice(5)} → {a.dataFim.slice(5)}</td>
+                    <td style={{ padding: "8px 10px", textAlign: "center", fontFamily: "monospace", fontSize: 11 }}>{a.dias}d</td>
+                  </tr>
+                ))}</tbody>
+              </table>
+            </div>
+          </div>
+        );
+      })()}
+
       {/* Recomendações */}
       <div style={card}>
         <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 14 }}>💡 Recomendações de Melhoria na Gestão</div>
@@ -327,6 +478,7 @@ function RadarSemanal({ data, saveData }) {
   const [importMode, setImportMode] = useState(null);
   const [filterCat, setFilterCat] = useState("Todas");
   const [filterForn, setFilterForn] = useState("Todos");
+  const [selectedWeek, setSelectedWeek] = useState(null); // null = última semana
   const [formData, setFormData] = useState({ data: new Date().toISOString().slice(0, 10), fornecedor: "", produto: "", categoria: "EPI", valUnit: "", qtd: "" });
   const [bulkText, setBulkText] = useState("");
   const [csvPreview, setCsvPreview] = useState(null);
@@ -354,36 +506,7 @@ function RadarSemanal({ data, saveData }) {
     if (newEntries.length > 0) { saveData([...data, ...newEntries]); setBulkText(""); }
   };
 
-  // CSV parser
-  const parseOriginalCSV = (text) => {
-    const lines = text.replace(/\r\n/g, "\n").replace(/\r/g, "\n").trim().split("\n");
-    const entries = [];
-    let currentDate = null, currentNFe = null, currentFornecedor = null;
-    for (let i = 0; i < lines.length; i++) {
-      const line = lines[i].trim();
-      if (!line || /^(Data da compra|C.digo|Fornecedor|Nome do produto|Total geral)/i.test(line)) continue;
-      const dateMatch = line.match(/^(\d{2}\/\d{2}\/\d{4})\s*;*\s*$/);
-      if (dateMatch) { const p = dateMatch[1].split("/"); currentDate = `${p[2]}-${p[1]}-${p[0]}`; continue; }
-      if (/^NFe\s+/i.test(line.replace(/;+$/, ""))) { currentNFe = line.replace(/;+$/, "").trim(); continue; }
-      const stripped = line.replace(/;+$/, "");
-      if (stripped && !stripped.includes(";") && !/^\d{2}\/\d{2}\/\d{4}$/.test(stripped) && !/^NFe\s+/i.test(stripped)) {
-        if (line.endsWith(";;;;") || (i + 1 < lines.length && lines[i + 1].trim().includes(";") && /\d/.test(lines[i + 1]))) { currentFornecedor = stripped; continue; }
-      }
-      const allParts = line.replace(/;+$/, "").split(";");
-      if (allParts.length >= 4) {
-        const vu = parseFloat(allParts[allParts.length - 3].replace(/\./g, "").replace(",", "."));
-        const qt = parseFloat(allParts[allParts.length - 2].replace(/\./g, "").replace(",", "."));
-        const vb = parseFloat(allParts[allParts.length - 1].replace(/\./g, "").replace(",", "."));
-        if (!isNaN(vu) && !isNaN(qt) && !isNaN(vb) && qt > 0 && vu > 0) {
-          const prodName = allParts.slice(0, -3).join(";").trim();
-          if (prodName && currentDate) {
-            entries.push({ data: currentDate, semana: getWeekLabel(currentDate), fornecedor: currentFornecedor || "Não identificado", produto: prodName, categoria: autoCategory(prodName), valUnit: vu, qtd: Math.round(qt) });
-          }
-        }
-      }
-    }
-    return entries;
-  };
+  // Uses the shared parseOriginalCSV (handles both ; and , formats)
 
   const handleFileUpload = (e) => {
     const file = e.target.files?.[0]; if (!file) return;
@@ -430,11 +553,18 @@ function RadarSemanal({ data, saveData }) {
   });
   priceVariations.sort((a, b) => Math.abs(b.varPct) - Math.abs(a.varPct));
 
-  const lastWeek = allWeeks[allWeeks.length - 1];
-  const prevWeek = allWeeks.length >= 2 ? allWeeks[allWeeks.length - 2] : null;
-  const lastVol = weeklyVolume.find(w => w.semana === lastWeek)?.["Valor Total (R$)"] || 0;
-  const prevVol = prevWeek ? (weeklyVolume.find(w => w.semana === prevWeek)?.["Valor Total (R$)"] || 0) : 0;
-  const volChange = prevVol > 0 ? ((lastVol - prevVol) / prevVol * 100) : 0;
+  // Week selection logic
+  const activeWeek = selectedWeek || allWeeks[allWeeks.length - 1] || "";
+  const activeIdx = allWeeks.indexOf(activeWeek);
+  const prevWeekLabel = activeIdx > 0 ? allWeeks[activeIdx - 1] : null;
+  const activeVol = weeklyVolume.find(w => w.semana === activeWeek)?.["Valor Total (R$)"] || 0;
+  const prevVol = prevWeekLabel ? (weeklyVolume.find(w => w.semana === prevWeekLabel)?.["Valor Total (R$)"] || 0) : 0;
+  const volChange = prevVol > 0 ? ((activeVol - prevVol) / prevVol * 100) : 0;
+
+  // Items in the active week
+  const weekItems = filtered.filter(d => d.semana === activeWeek);
+  const weekByForn = _.orderBy(Object.entries(_.groupBy(weekItems, "fornecedor")).map(([f, items]) => ({ fornecedor: f, total: _.sumBy(items, d => d.valUnit * d.qtd), itens: items.length })), "total", "desc");
+  const weekByCat = _.orderBy(Object.entries(_.groupBy(weekItems, "categoria")).map(([c, items]) => ({ cat: c, total: _.sumBy(items, d => d.valUnit * d.qtd) })), "total", "desc");
 
   const catWeekly = allWeeks.map(w => {
     const row = { semana: w };
@@ -536,34 +666,87 @@ function RadarSemanal({ data, saveData }) {
         <span style={{ fontSize: 12, color: "#8c94a3" }}>Filtrar:</span>
         <select value={filterCat} onChange={e => setFilterCat(e.target.value)} style={{ ...inp, width: "auto", minWidth: 130 }}><option value="Todas">Todas categorias</option>{CATEGORIAS.map(c => <option key={c}>{c}</option>)}</select>
         <select value={filterForn} onChange={e => setFilterForn(e.target.value)} style={{ ...inp, width: "auto", minWidth: 150 }}><option value="Todos">Todos fornecedores</option>{allFornecedores.map(f => <option key={f}>{f}</option>)}</select>
+        {radarView === "radar" && <>
+          <span style={{ fontSize: 12, color: "#6b7280", marginLeft: 8 }}>|</span>
+          <span style={{ fontSize: 12, color: "#8c94a3" }}>Semana:</span>
+          <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+            <button onClick={() => { const idx = allWeeks.indexOf(activeWeek); if (idx > 0) setSelectedWeek(allWeeks[idx - 1]); }} disabled={activeIdx <= 0}
+              style={{ padding: "4px 8px", borderRadius: 6, border: "1px solid #252b35", background: "#1c2129", color: activeIdx > 0 ? "#60a5fa" : "#3a3f4a", fontSize: 14, cursor: activeIdx > 0 ? "pointer" : "default" }}>◀</button>
+            <select value={activeWeek} onChange={e => setSelectedWeek(e.target.value)} style={{ ...inp, width: "auto", minWidth: 100, textAlign: "center", fontWeight: 600 }}>
+              {allWeeks.map(w => <option key={w} value={w}>{w}</option>)}
+            </select>
+            <button onClick={() => { const idx = allWeeks.indexOf(activeWeek); if (idx < allWeeks.length - 1) setSelectedWeek(allWeeks[idx + 1]); }} disabled={activeIdx >= allWeeks.length - 1}
+              style={{ padding: "4px 8px", borderRadius: 6, border: "1px solid #252b35", background: "#1c2129", color: activeIdx < allWeeks.length - 1 ? "#60a5fa" : "#3a3f4a", fontSize: 14, cursor: activeIdx < allWeeks.length - 1 ? "pointer" : "default" }}>▶</button>
+          </div>
+        </>}
       </div>
 
       {/* Radar */}
       {radarView === "radar" && (
         <div>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 14, marginBottom: 16 }}>
-            <KPI label="Última Semana" value={lastWeek || "—"} detail={formatBRL(lastVol)} color="#3b82f6" />
-            <KPI label="Variação Semanal" value={`${volChange >= 0 ? "+" : ""}${volChange.toFixed(1)}%`} detail={`vs ${prevWeek || "—"}`} color={volChange > 20 ? "#ef4444" : volChange < -20 ? "#22c55e" : "#f59e0b"} />
-            <KPI label="Total Acumulado" value={formatBRL(_.sumBy(filtered, d => d.valUnit * d.qtd))} detail={`${filtered.length} linhas`} color="#a78bfa" />
-            <KPI label="Alertas de Preço" value={priceVariations.filter(p => Math.abs(p.varPct) > 10).length.toString()} detail="variações > 10%" color="#ef4444" />
+            <KPI label="Semana Selecionada" value={activeWeek || "—"} detail={formatBRL(activeVol)} color="#3b82f6" />
+            <KPI label="Variação vs Anterior" value={`${volChange >= 0 ? "+" : ""}${volChange.toFixed(1)}%`} detail={`vs ${prevWeekLabel || "—"}`} color={volChange > 20 ? "#ef4444" : volChange < -20 ? "#22c55e" : "#f59e0b"} />
+            <KPI label="Itens na Semana" value={weekItems.length.toString()} detail={`${weekByForn.length} fornecedor(es)`} color="#a78bfa" />
+            <KPI label="Total Acumulado" value={formatBRL(_.sumBy(filtered, d => d.valUnit * d.qtd))} detail={`${filtered.length} linhas`} color="#22c55e" />
           </div>
+
+          {/* Weekly chart */}
           <div style={card}>
-            <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 16 }}>📊 Volume Semanal de Compras</div>
+            <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 16 }}>📊 Volume Semanal de Compras <span style={{ fontSize: 11, fontWeight: 400, color: "#8c94a3" }}>— clique na barra para selecionar</span></div>
             <ResponsiveContainer width="100%" height={260}>
-              <ComposedChart data={weeklyVolume}>
+              <ComposedChart data={weeklyVolume} onClick={(e) => { if (e?.activeLabel) setSelectedWeek(e.activeLabel); }}>
                 <CartesianGrid strokeDasharray="3 3" stroke="#252b35" />
                 <XAxis dataKey="semana" tick={{ fill: "#8c94a3", fontSize: 10 }} />
                 <YAxis tick={{ fill: "#8c94a3", fontSize: 10 }} />
                 <Tooltip content={<CustomTooltip />} />
-                <Bar dataKey="Valor Total (R$)" radius={[4, 4, 0, 0]}>{weeklyVolume.map((e, i) => <Cell key={i} fill={e.semana === lastWeek ? "#3b82f6" : "#1e3a5f"} />)}</Bar>
+                <Bar dataKey="Valor Total (R$)" radius={[4, 4, 0, 0]} style={{ cursor: "pointer" }}>{weeklyVolume.map((e, i) => <Cell key={i} fill={e.semana === activeWeek ? "#3b82f6" : "#1e3a5f"} />)}</Bar>
                 <Line type="monotone" dataKey="Qtd Itens" stroke="#f59e0b" strokeWidth={2} dot={{ r: 3, fill: "#f59e0b" }} />
               </ComposedChart>
             </ResponsiveContainer>
           </div>
-          <div style={{ ...card, marginTop: 16 }}>
-            <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 12 }}>⚠️ Alertas</div>
-            {priceVariations.filter(p => p.varPct > 10).map((p, i) => <AlertBadge key={i} type="warning"><strong>{p.produto}</strong> — preço subiu {p.varPct}% ({formatBRL(p.first)} → {formatBRL(p.last)})</AlertBadge>)}
-            {priceVariations.filter(p => p.varPct > 10).length === 0 && <AlertBadge type="info">Sem alertas críticos. Variações dentro da faixa normal.</AlertBadge>}
+
+          {/* Week detail panel */}
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, marginTop: 16 }}>
+            <div style={card}>
+              <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 12 }}>📋 Detalhes da Semana {activeWeek}</div>
+              {weekItems.length === 0 ? <div style={{ color: "#6b7280", fontSize: 12 }}>Sem compras nesta semana.</div> : (
+                <div style={{ maxHeight: 300, overflowY: "auto" }}>
+                  <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11 }}>
+                    <thead><tr style={{ borderBottom: "1px solid #252b35" }}>
+                      {["Fornecedor", "Produto", "Val.Un.", "Qtd", "Total"].map(h => <th key={h} style={{ padding: "6px 8px", textAlign: h.includes("Val") || h === "Qtd" || h === "Total" ? "right" : "left", fontSize: 10, color: "#8c94a3", fontWeight: 500 }}>{h}</th>)}
+                    </tr></thead>
+                    <tbody>{weekItems.map((d, i) => (
+                      <tr key={i} style={{ borderBottom: "1px solid #1c2129" }}>
+                        <td style={{ padding: "5px 8px", maxWidth: 120, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", color: "#8c94a3" }}>{d.fornecedor}</td>
+                        <td style={{ padding: "5px 8px", maxWidth: 180, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{d.produto}</td>
+                        <td style={{ padding: "5px 8px", textAlign: "right", fontFamily: "monospace" }}>{formatBRL(d.valUnit)}</td>
+                        <td style={{ padding: "5px 8px", textAlign: "right", fontFamily: "monospace" }}>{d.qtd}</td>
+                        <td style={{ padding: "5px 8px", textAlign: "right", fontFamily: "monospace", fontWeight: 600 }}>{formatBRL(d.valUnit * d.qtd)}</td>
+                      </tr>
+                    ))}</tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+            <div style={card}>
+              <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 12 }}>⚠️ Alertas</div>
+              {volChange > 30 && <AlertBadge type="critical">Volume de {activeWeek} subiu {volChange.toFixed(0)}% vs semana anterior.</AlertBadge>}
+              {volChange < -50 && <AlertBadge type="info">Volume de {activeWeek} caiu {Math.abs(volChange).toFixed(0)}% vs anterior.</AlertBadge>}
+              {priceVariations.filter(p => p.varPct > 10).slice(0, 5).map((p, i) => <AlertBadge key={i} type="warning"><strong>{p.produto}</strong> — preço subiu {p.varPct}% ({formatBRL(p.first)} → {formatBRL(p.last)})</AlertBadge>)}
+              {priceVariations.filter(p => p.varPct > 10).length === 0 && volChange <= 30 && volChange >= -50 && <AlertBadge type="info">Sem alertas críticos. Variações dentro da faixa normal.</AlertBadge>}
+              {weekByForn.length > 0 && (
+                <div style={{ marginTop: 12 }}>
+                  <div style={{ fontSize: 11, color: "#8c94a3", marginBottom: 6 }}>FORNECEDORES NA SEMANA</div>
+                  {weekByForn.map(f => (
+                    <div key={f.fornecedor} style={{ display: "flex", justifyContent: "space-between", padding: "4px 0", fontSize: 12, borderBottom: "1px solid #1c2129" }}>
+                      <span style={{ color: "#cbd5e1" }}>{f.fornecedor}</span>
+                      <span style={{ fontFamily: "monospace", color: "#8c94a3" }}>{formatBRL(f.total)}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
           </div>
         </div>
       )}
