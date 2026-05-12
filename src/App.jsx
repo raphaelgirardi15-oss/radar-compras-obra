@@ -253,7 +253,20 @@ const card = { background: "#151920", border: "1px solid #252b35", borderRadius:
 // ════════════════════════════════════════════
 //  ANÁLISE DE COMPRAS — Dashboard Executivo
 // ════════════════════════════════════════════
-function AnaliseCompras({ data }) {
+function AnaliseCompras({ data: rawData }) {
+  const [filterAno, setFilterAno] = useState("Todos");
+  const [filterMes, setFilterMes] = useState("Todos");
+
+  const allYears = _.sortBy(_.uniq(rawData.map(d => d.data.slice(0, 4))));
+  const MESES = ["Jan","Fev","Mar","Abr","Mai","Jun","Jul","Ago","Set","Out","Nov","Dez"];
+  const allMonths = _.sortBy(_.uniq(rawData.map(d => parseInt(d.data.slice(5, 7)))));
+
+  const data = rawData.filter(d => {
+    if (filterAno !== "Todos" && d.data.slice(0, 4) !== filterAno) return false;
+    if (filterMes !== "Todos" && parseInt(d.data.slice(5, 7)) !== parseInt(filterMes)) return false;
+    return true;
+  });
+
   const total = _.sumBy(data, d => d.valUnit * d.qtd);
   const fornecedores = _.uniq(data.map(d => d.fornecedor));
   const nForn = fornecedores.length;
@@ -306,6 +319,29 @@ function AnaliseCompras({ data }) {
 
   return (
     <div className="print-area" style={{ padding: "20px 24px", maxWidth: 1400, margin: "0 auto" }}>
+      {/* Filters */}
+      <div className="no-print" style={{ display: "flex", gap: 10, marginBottom: 16, flexWrap: "wrap", alignItems: "center", background: "#151920", border: "1px solid #252b35", borderRadius: 10, padding: "10px 16px" }}>
+        <span style={{ fontSize: 12, color: "#8c94a3", fontWeight: 600 }}>Filtros:</span>
+        <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+          <span style={{ fontSize: 11, color: "#6b7280" }}>Ano:</span>
+          <select value={filterAno} onChange={e => setFilterAno(e.target.value)} style={{ ...inp, width: "auto", minWidth: 90 }}>
+            <option value="Todos">Todos</option>
+            {allYears.map(y => <option key={y} value={y}>{y}</option>)}
+          </select>
+        </div>
+        <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+          <span style={{ fontSize: 11, color: "#6b7280" }}>Mês:</span>
+          <select value={filterMes} onChange={e => setFilterMes(e.target.value)} style={{ ...inp, width: "auto", minWidth: 90 }}>
+            <option value="Todos">Todos</option>
+            {allMonths.map(m => <option key={m} value={m}>{MESES[m - 1]}</option>)}
+          </select>
+        </div>
+        {(filterAno !== "Todos" || filterMes !== "Todos") && (
+          <button onClick={() => { setFilterAno("Todos"); setFilterMes("Todos"); }} style={{ padding: "4px 12px", borderRadius: 6, border: "1px solid #252b35", background: "#1c2129", color: "#ef4444", fontSize: 11, cursor: "pointer" }}>✕ Limpar filtros</button>
+        )}
+        <span style={{ fontSize: 11, color: "#6b7280", marginLeft: "auto" }}>{data.length} registros · {filterAno !== "Todos" || filterMes !== "Todos" ? "filtrado" : "total"}</span>
+      </div>
+
       {/* KPIs */}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 14, marginBottom: 20 }}>
         <KPI label="Total Comprado" value={formatBRL(total)} detail="Valor bruto acumulado" color="#60a5fa" />
@@ -313,6 +349,47 @@ function AnaliseCompras({ data }) {
         <KPI label="Registros" value={data.length.toString()} detail={`Média ${formatBRL(total / Math.max(data.length, 1))}/item`} color="#e4e8ef" />
         <KPI label="Anomalias" value={priceAnomalies.length.toString()} detail="Variações de preço > 8%" color="#ef4444" />
       </div>
+
+      {/* Annual evolution chart — only show if multiple years */}
+      {allYears.length > 1 && filterAno === "Todos" && (
+        <div style={{ ...card, marginBottom: 16 }}>
+          <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 14 }}>📅 Evolução Anual Comparativa</div>
+          <ResponsiveContainer width="100%" height={280}>
+            <ComposedChart data={(() => {
+              const monthData = [];
+              for (let m = 1; m <= 12; m++) {
+                const row = { mes: MESES[m - 1] };
+                allYears.forEach(y => {
+                  const items = rawData.filter(d => d.data.slice(0, 4) === y && parseInt(d.data.slice(5, 7)) === m);
+                  row[y] = Math.round(_.sumBy(items, d => d.valUnit * d.qtd) * 100) / 100;
+                });
+                if (allYears.some(y => row[y] > 0)) monthData.push(row);
+              }
+              return monthData;
+            })()}>
+              <CartesianGrid strokeDasharray="3 3" stroke="#252b35" />
+              <XAxis dataKey="mes" tick={{ fill: "#8c94a3", fontSize: 11 }} />
+              <YAxis tick={{ fill: "#8c94a3", fontSize: 10 }} />
+              <Tooltip content={<CustomTooltip />} />
+              <Legend wrapperStyle={{ fontSize: 12 }} />
+              {allYears.map((y, i) => (
+                <Bar key={y} dataKey={y} name={`${y} (R$)`} fill={["#3b82f6", "#f59e0b", "#22c55e", "#a78bfa"][i % 4]} radius={[4, 4, 0, 0]} />
+              ))}
+            </ComposedChart>
+          </ResponsiveContainer>
+          <div style={{ display: "flex", gap: 20, justifyContent: "center", marginTop: 10 }}>
+            {allYears.map((y, i) => {
+              const yearTotal = _.sumBy(rawData.filter(d => d.data.slice(0, 4) === y), d => d.valUnit * d.qtd);
+              return (
+                <div key={y} style={{ textAlign: "center" }}>
+                  <div style={{ fontSize: 11, color: "#8c94a3" }}>{y}</div>
+                  <div style={{ fontSize: 16, fontWeight: 700, fontFamily: "monospace", color: ["#3b82f6", "#f59e0b"][i % 2] }}>{formatBRL(yearTotal)}</div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
 
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, marginBottom: 16 }}>
         {/* Fornecedores */}
@@ -472,23 +549,36 @@ function AnaliseCompras({ data }) {
 // ════════════════════════════════════════════
 //  RADAR SEMANAL — Operacional
 // ════════════════════════════════════════════
-function RadarSemanal({ data, saveData }) {
+function RadarSemanal({ data: rawData, saveData }) {
   const [radarView, setRadarView] = useState("radar");
   const [showForm, setShowForm] = useState(false);
   const [importMode, setImportMode] = useState(null);
   const [filterCat, setFilterCat] = useState("Todas");
   const [filterForn, setFilterForn] = useState("Todos");
-  const [selectedWeek, setSelectedWeek] = useState(null); // null = última semana
+  const [filterAno, setFilterAno] = useState("Todos");
+  const [filterMes, setFilterMes] = useState("Todos");
+  const [selectedWeek, setSelectedWeek] = useState(null);
   const [formData, setFormData] = useState({ data: new Date().toISOString().slice(0, 10), fornecedor: "", produto: "", categoria: "EPI", valUnit: "", qtd: "" });
   const [bulkText, setBulkText] = useState("");
   const [csvPreview, setCsvPreview] = useState(null);
   const [importMsg, setImportMsg] = useState(null);
   const fileRef = useRef();
 
+  const MESES = ["Jan","Fev","Mar","Abr","Mai","Jun","Jul","Ago","Set","Out","Nov","Dez"];
+  const allYears = _.sortBy(_.uniq(rawData.map(d => d.data.slice(0, 4))));
+  const allMonthNums = _.sortBy(_.uniq(rawData.map(d => parseInt(d.data.slice(5, 7)))));
+
+  // Apply year/month filter
+  const data = rawData.filter(d => {
+    if (filterAno !== "Todos" && d.data.slice(0, 4) !== filterAno) return false;
+    if (filterMes !== "Todos" && parseInt(d.data.slice(5, 7)) !== parseInt(filterMes)) return false;
+    return true;
+  });
+
   const addEntry = () => {
     if (!formData.data || !formData.fornecedor || !formData.produto || !formData.valUnit || !formData.qtd) return;
     const entry = { ...formData, valUnit: parseFloat(formData.valUnit), qtd: parseInt(formData.qtd), semana: getWeekLabel(formData.data) };
-    saveData([...data, entry]);
+    saveData([...rawData, entry]);
     setFormData({ data: formData.data, fornecedor: "", produto: "", categoria: "EPI", valUnit: "", qtd: "" });
   };
 
@@ -503,7 +593,7 @@ function RadarSemanal({ data, saveData }) {
         newEntries.push({ data: dateStr, semana: getWeekLabel(dateStr), fornecedor: forn, produto: prod, categoria: CATEGORIAS.includes(cat) ? cat : "Outros", valUnit: parseFloat(vu.replace(",", ".")), qtd: parseInt(q) });
       }
     }
-    if (newEntries.length > 0) { saveData([...data, ...newEntries]); setBulkText(""); }
+    if (newEntries.length > 0) { saveData([...rawData, ...newEntries]); setBulkText(""); }
   };
 
   // Uses the shared parseOriginalCSV (handles both ; and , formats)
@@ -527,7 +617,7 @@ function RadarSemanal({ data, saveData }) {
     if (!csvPreview) return;
     const ne = csvPreview.entries;
     if (mode === "replace") { saveData(ne); setImportMsg({ type: "success", text: `Base substituída com ${ne.length} registros.` }); }
-    else { saveData([...data, ...ne]); setImportMsg({ type: "success", text: `${ne.length} registros adicionados. Total: ${data.length + ne.length}.` }); }
+    else { saveData([...rawData, ...ne]); setImportMsg({ type: "success", text: `${ne.length} registros adicionados. Total: ${rawData.length + ne.length}.` }); }
     setCsvPreview(null); setTimeout(() => setImportMsg(null), 4000);
   };
 
@@ -662,13 +752,18 @@ function RadarSemanal({ data, saveData }) {
       )}
 
       {/* Filters */}
-      <div style={{ display: "flex", gap: 10, marginBottom: 16, flexWrap: "wrap", alignItems: "center" }}>
-        <span style={{ fontSize: 12, color: "#8c94a3" }}>Filtrar:</span>
-        <select value={filterCat} onChange={e => setFilterCat(e.target.value)} style={{ ...inp, width: "auto", minWidth: 130 }}><option value="Todas">Todas categorias</option>{CATEGORIAS.map(c => <option key={c}>{c}</option>)}</select>
-        <select value={filterForn} onChange={e => setFilterForn(e.target.value)} style={{ ...inp, width: "auto", minWidth: 150 }}><option value="Todos">Todos fornecedores</option>{allFornecedores.map(f => <option key={f}>{f}</option>)}</select>
+      <div style={{ display: "flex", gap: 10, marginBottom: 16, flexWrap: "wrap", alignItems: "center", background: "#151920", border: "1px solid #252b35", borderRadius: 10, padding: "10px 16px" }}>
+        <span style={{ fontSize: 12, color: "#8c94a3", fontWeight: 600 }}>Filtros:</span>
+        <select value={filterAno} onChange={e => { setFilterAno(e.target.value); setSelectedWeek(null); }} style={{ ...inp, width: "auto", minWidth: 80 }}><option value="Todos">Ano</option>{allYears.map(y => <option key={y} value={y}>{y}</option>)}</select>
+        <select value={filterMes} onChange={e => { setFilterMes(e.target.value); setSelectedWeek(null); }} style={{ ...inp, width: "auto", minWidth: 80 }}><option value="Todos">Mês</option>{allMonthNums.map(m => <option key={m} value={m}>{MESES[m - 1]}</option>)}</select>
+        <select value={filterCat} onChange={e => setFilterCat(e.target.value)} style={{ ...inp, width: "auto", minWidth: 120 }}><option value="Todas">Categorias</option>{CATEGORIAS.map(c => <option key={c}>{c}</option>)}</select>
+        <select value={filterForn} onChange={e => setFilterForn(e.target.value)} style={{ ...inp, width: "auto", minWidth: 140 }}><option value="Todos">Fornecedores</option>{allFornecedores.map(f => <option key={f}>{f}</option>)}</select>
+        {(filterAno !== "Todos" || filterMes !== "Todos" || filterCat !== "Todas" || filterForn !== "Todos") && (
+          <button onClick={() => { setFilterAno("Todos"); setFilterMes("Todos"); setFilterCat("Todas"); setFilterForn("Todos"); setSelectedWeek(null); }} style={{ padding: "4px 10px", borderRadius: 6, border: "1px solid #252b35", background: "#1c2129", color: "#ef4444", fontSize: 11, cursor: "pointer" }}>✕ Limpar</button>
+        )}
         {radarView === "radar" && <>
-          <span style={{ fontSize: 12, color: "#6b7280", marginLeft: 8 }}>|</span>
-          <span style={{ fontSize: 12, color: "#8c94a3" }}>Semana:</span>
+          <span style={{ fontSize: 12, color: "#3a3f4a" }}>|</span>
+          <span style={{ fontSize: 11, color: "#8c94a3" }}>Semana:</span>
           <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
             <button onClick={() => { const idx = allWeeks.indexOf(activeWeek); if (idx > 0) setSelectedWeek(allWeeks[idx - 1]); }} disabled={activeIdx <= 0}
               style={{ padding: "4px 8px", borderRadius: 6, border: "1px solid #252b35", background: "#1c2129", color: activeIdx > 0 ? "#60a5fa" : "#3a3f4a", fontSize: 14, cursor: activeIdx > 0 ? "pointer" : "default" }}>◀</button>
@@ -679,6 +774,7 @@ function RadarSemanal({ data, saveData }) {
               style={{ padding: "4px 8px", borderRadius: 6, border: "1px solid #252b35", background: "#1c2129", color: activeIdx < allWeeks.length - 1 ? "#60a5fa" : "#3a3f4a", fontSize: 14, cursor: activeIdx < allWeeks.length - 1 ? "pointer" : "default" }}>▶</button>
           </div>
         </>}
+        <span style={{ fontSize: 10, color: "#6b7280", marginLeft: "auto" }}>{data.length} reg.</span>
       </div>
 
       {/* Radar */}
@@ -804,7 +900,7 @@ function RadarSemanal({ data, saveData }) {
                   <td style={{ padding: "7px 8px", textAlign: "right", fontFamily: "monospace" }}>{formatBRL(d.valUnit)}</td>
                   <td style={{ padding: "7px 8px", textAlign: "right", fontFamily: "monospace" }}>{d.qtd}</td>
                   <td style={{ padding: "7px 8px", textAlign: "right", fontFamily: "monospace", fontWeight: 600 }}>{formatBRL(d.valUnit * d.qtd)}</td>
-                  <td style={{ padding: "7px 8px" }}><button onClick={() => { if (confirm("Remover?")) { const idx = data.length - 1 - i; saveData(data.filter((_, j) => j !== idx)); } }} style={{ background: "none", border: "none", color: "#ef4444", cursor: "pointer", fontSize: 13, opacity: 0.4 }}>✕</button></td>
+                  <td style={{ padding: "7px 8px" }}><button onClick={() => { if (confirm("Remover?")) { const idx = rawData.length - 1 - i; saveData(rawData.filter((_, j) => j !== idx)); } }} style={{ background: "none", border: "none", color: "#ef4444", cursor: "pointer", fontSize: 13, opacity: 0.4 }}>✕</button></td>
                 </tr>
               ))}</tbody>
             </table>
